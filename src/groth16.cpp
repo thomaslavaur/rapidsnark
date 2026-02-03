@@ -47,38 +47,141 @@ std::unique_ptr<Prover<Engine>> makeProver(
 }
 
 template <typename Engine>
-std::unique_ptr<Proof<Engine>> Prover<Engine>::prove(typename Engine::FrElement *wtns) {
-
-    ThreadPool &threadPool = ThreadPool::defaultPool();
-
+void Prover<Engine>::computeMSMForWitness(
+    typename Engine::FrElement *wtns,
+    typename Engine::G1Point &pi_a,
+    typename Engine::G1Point &pib1,
+    typename Engine::G2Point &pi_b,
+    typename Engine::G1Point &pi_c)
+{
     LOG_TRACE("Start Multiexp A");
     uint32_t sW = sizeof(wtns[0]);
-    typename Engine::G1Point pi_a;
     E.g1.multiMulByScalarMSM(pi_a, pointsA, (uint8_t *)wtns, sW, nVars);
     std::ostringstream ss2;
     ss2 << "pi_a: " << E.g1.toString(pi_a);
     LOG_DEBUG(ss2);
 
     LOG_TRACE("Start Multiexp B1");
-    typename Engine::G1Point pib1;
     E.g1.multiMulByScalarMSM(pib1, pointsB1, (uint8_t *)wtns, sW, nVars);
     std::ostringstream ss3;
     ss3 << "pib1: " << E.g1.toString(pib1);
     LOG_DEBUG(ss3);
 
     LOG_TRACE("Start Multiexp B2");
-    typename Engine::G2Point pi_b;
     E.g2.multiMulByScalarMSM(pi_b, pointsB2, (uint8_t *)wtns, sW, nVars);
     std::ostringstream ss4;
     ss4 << "pi_b: " << E.g2.toString(pi_b);
     LOG_DEBUG(ss4);
 
     LOG_TRACE("Start Multiexp C");
-    typename Engine::G1Point pi_c;
     E.g1.multiMulByScalarMSM(pi_c, pointsC, (uint8_t *)((uint64_t)wtns + (nPublic +1)*sW), sW, nVars-nPublic-1);
     std::ostringstream ss5;
     ss5 << "pi_c: " << E.g1.toString(pi_c);
     LOG_DEBUG(ss5);
+}
+
+template <typename Engine>
+void Prover<Engine>::computeMSMForIndices(
+    typename Engine::FrElement *wtns,
+    const std::vector<u_int32_t> &indices,
+    typename Engine::G1Point &pi_a,
+    typename Engine::G1Point &pib1,
+    typename Engine::G2Point &pi_b,
+    typename Engine::G1Point &pi_c)
+{
+    std::vector<typename Engine::G1PointAffine> pointsA_subset;
+    std::vector<typename Engine::G1PointAffine> pointsB1_subset;
+    std::vector<typename Engine::G2PointAffine> pointsB2_subset;
+    std::vector<typename Engine::G1PointAffine> pointsC_subset;
+    std::vector<typename Engine::FrElement> scalarsA;
+    std::vector<typename Engine::FrElement> scalarsB1;
+    std::vector<typename Engine::FrElement> scalarsB2;
+    std::vector<typename Engine::FrElement> scalarsC;
+
+    pointsA_subset.reserve(indices.size());
+    pointsB1_subset.reserve(indices.size());
+    pointsB2_subset.reserve(indices.size());
+    scalarsA.reserve(indices.size());
+    scalarsB1.reserve(indices.size());
+    scalarsB2.reserve(indices.size());
+
+    for (u_int32_t idx : indices) {
+        pointsA_subset.push_back(pointsA[idx]);
+        pointsB1_subset.push_back(pointsB1[idx]);
+        pointsB2_subset.push_back(pointsB2[idx]);
+        scalarsA.push_back(wtns[idx]);
+        scalarsB1.push_back(wtns[idx]);
+        scalarsB2.push_back(wtns[idx]);
+
+        if (idx > nPublic) {
+            const u_int32_t cIndex = idx - (nPublic + 1);
+            pointsC_subset.push_back(pointsC[cIndex]);
+            scalarsC.push_back(wtns[idx]);
+        }
+    }
+
+    const uint32_t sW = sizeof(wtns[0]);
+
+    if (!pointsA_subset.empty()) {
+        E.g1.multiMulByScalarMSM(
+            pi_a,
+            pointsA_subset.data(),
+            (uint8_t *)scalarsA.data(),
+            sW,
+            pointsA_subset.size());
+    } else {
+        typename Engine::FrElement zero;
+        E.fr.copy(zero, E.fr.zero());
+        E.g1.mulByScalar(pi_a, pointsA[0], (uint8_t *)&zero, sizeof(zero));
+    }
+
+    if (!pointsB1_subset.empty()) {
+        E.g1.multiMulByScalarMSM(
+            pib1,
+            pointsB1_subset.data(),
+            (uint8_t *)scalarsB1.data(),
+            sW,
+            pointsB1_subset.size());
+    } else {
+        typename Engine::FrElement zero;
+        E.fr.copy(zero, E.fr.zero());
+        E.g1.mulByScalar(pib1, pointsB1[0], (uint8_t *)&zero, sizeof(zero));
+    }
+
+    if (!pointsB2_subset.empty()) {
+        E.g2.multiMulByScalarMSM(
+            pi_b,
+            pointsB2_subset.data(),
+            (uint8_t *)scalarsB2.data(),
+            sW,
+            pointsB2_subset.size());
+    } else {
+        typename Engine::FrElement zero;
+        E.fr.copy(zero, E.fr.zero());
+        E.g2.mulByScalar(pi_b, pointsB2[0], (uint8_t *)&zero, sizeof(zero));
+    }
+
+    if (!pointsC_subset.empty()) {
+        E.g1.multiMulByScalarMSM(
+            pi_c,
+            pointsC_subset.data(),
+            (uint8_t *)scalarsC.data(),
+            sW,
+            pointsC_subset.size());
+    } else {
+        E.g1.copy(pi_c, E.g1.zero());
+    }
+}
+
+template <typename Engine>
+std::unique_ptr<Proof<Engine>> Prover<Engine>::proveWithPrecomputed(
+    typename Engine::FrElement *wtns,
+    typename Engine::G1Point &pi_a,
+    typename Engine::G1Point &pib1,
+    typename Engine::G2Point &pi_b,
+    typename Engine::G1Point &pi_c)
+{
+    ThreadPool &threadPool = ThreadPool::defaultPool();
 
     LOG_TRACE("Start Initializing a b c A");
     auto a = new typename Engine::FrElement[domainSize];
@@ -261,6 +364,18 @@ std::unique_ptr<Proof<Engine>> Prover<Engine>::prove(typename Engine::FrElement 
     E.g1.copy(p->C, pi_c);
 
     return std::unique_ptr<Proof<Engine>>(p);
+}
+
+template <typename Engine>
+std::unique_ptr<Proof<Engine>> Prover<Engine>::prove(typename Engine::FrElement *wtns) {
+    typename Engine::G1Point pi_a;
+    typename Engine::G1Point pib1;
+    typename Engine::G2Point pi_b;
+    typename Engine::G1Point pi_c;
+
+    computeMSMForWitness(wtns, pi_a, pib1, pi_b, pi_c);
+
+    return proveWithPrecomputed(wtns, pi_a, pib1, pi_b, pi_c);
 }
 
 template <typename Engine>

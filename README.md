@@ -119,6 +119,19 @@ with:
 ./package/bin/prover <circuit.zkey> <witness.wtns> <proof.json> <public.json>
 ```
 
+### Batch POQ prover
+
+For circuits where most witness entries remain unchanged, you can generate multiple Groth16 proofs while reusing the common MSM contribution. The `poqprover` command expects the number of proofs, followed by that many witness files, proof outputs, and public output files:
+
+```sh
+./package/bin/poqprover <circuit.zkey> <proof_count> \
+  <witness_1.wtns> ... <witness_N.wtns> \
+  <proof_1.json> ... <proof_N.json> \
+  <public_1.json> ... <public_N.json>
+```
+
+The current implementation assumes witnesses only differ at indices `1`, `13`, `16892-17131`, `17136-17143`, and `17381-18091`, and uses the first witness as the common baseline.
+
 ## Compile prover in server mode
 
 ```sh
