@@ -51,6 +51,7 @@ namespace Groth16 {
     template <typename Engine>
     class Prover {
 
+    protected:
         Engine &E;
         u_int32_t nVars;
         u_int32_t nPublic;
@@ -69,6 +70,7 @@ namespace Groth16 {
         typename Engine::G1PointAffine *pointsH;
 
         FFT<typename Engine::Fr> *fft;
+
     public:
         Prover(
             Engine &_E, 
@@ -116,11 +118,68 @@ namespace Groth16 {
     };
 
     template <typename Engine>
+    class PoqProver : public Prover<Engine> {
+        std::vector<typename Engine::FrElement> baseWtns;
+        std::vector<u_int32_t> mutableIndices;
+        typename Engine::G1Point baseA;
+        typename Engine::G1Point baseB1;
+        typename Engine::G2Point baseB2;
+        typename Engine::G1Point baseC;
+        bool baseReady;
+
+    public:
+        PoqProver(
+            Engine &_E,
+            u_int32_t _nVars,
+            u_int32_t _nPublic,
+            u_int32_t _domainSize,
+            u_int64_t _nCoefs,
+            typename Engine::G1PointAffine &_vk_alpha1,
+            typename Engine::G1PointAffine &_vk_beta1,
+            typename Engine::G2PointAffine &_vk_beta2,
+            typename Engine::G1PointAffine &_vk_delta1,
+            typename Engine::G2PointAffine &_vk_delta2,
+            Coef<Engine> *_coefs,
+            typename Engine::G1PointAffine *_pointsA,
+            typename Engine::G1PointAffine *_pointsB1,
+            typename Engine::G2PointAffine *_pointsB2,
+            typename Engine::G1PointAffine *_pointsC,
+            typename Engine::G1PointAffine *_pointsH)
+            : Prover<Engine>(_E, _nVars, _nPublic, _domainSize, _nCoefs, _vk_alpha1, _vk_beta1,
+                             _vk_beta2, _vk_delta1, _vk_delta2, _coefs, _pointsA, _pointsB1,
+                             _pointsB2, _pointsC, _pointsH),
+              baseReady(false)
+        {}
+
+        void setBaseWitness(typename Engine::FrElement *wtns, const std::vector<u_int32_t> &indices);
+        std::unique_ptr<Proof<Engine>> proveWithDeltas(typename Engine::FrElement *wtns);
+    };
+
+    template <typename Engine>
     std::unique_ptr<Prover<Engine>> makeProver(
         u_int32_t nVars, 
         u_int32_t nPublic, 
         u_int32_t domainSize, 
         u_int64_t nCoefs, 
+        void *vk_alpha1,
+        void *vk_beta1,
+        void *vk_beta2,
+        void *vk_delta1,
+        void *vk_delta2,
+        void *coefs,
+        void *pointsA,
+        void *pointsB1,
+        void *pointsB2,
+        void *pointsC,
+        void *pointsH
+    );
+
+    template <typename Engine>
+    std::unique_ptr<PoqProver<Engine>> makePoqProver(
+        u_int32_t nVars,
+        u_int32_t nPublic,
+        u_int32_t domainSize,
+        u_int64_t nCoefs,
         void *vk_alpha1,
         void *vk_beta1,
         void *vk_beta2,

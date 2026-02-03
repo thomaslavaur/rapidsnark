@@ -47,6 +47,45 @@ std::unique_ptr<Prover<Engine>> makeProver(
 }
 
 template <typename Engine>
+std::unique_ptr<PoqProver<Engine>> makePoqProver(
+    u_int32_t nVars,
+    u_int32_t nPublic,
+    u_int32_t domainSize,
+    u_int64_t nCoeffs,
+    void *vk_alpha1,
+    void *vk_beta_1,
+    void *vk_beta_2,
+    void *vk_delta_1,
+    void *vk_delta_2,
+    void *coefs,
+    void *pointsA,
+    void *pointsB1,
+    void *pointsB2,
+    void *pointsC,
+    void *pointsH
+) {
+    PoqProver<Engine> *p = new PoqProver<Engine>(
+        Engine::engine,
+        nVars,
+        nPublic,
+        domainSize,
+        nCoeffs,
+        *(typename Engine::G1PointAffine *)vk_alpha1,
+        *(typename Engine::G1PointAffine *)vk_beta_1,
+        *(typename Engine::G2PointAffine *)vk_beta_2,
+        *(typename Engine::G1PointAffine *)vk_delta_1,
+        *(typename Engine::G2PointAffine *)vk_delta_2,
+        (Coef<Engine> *)((uint64_t)coefs + 4),
+        (typename Engine::G1PointAffine *)pointsA,
+        (typename Engine::G1PointAffine *)pointsB1,
+        (typename Engine::G2PointAffine *)pointsB2,
+        (typename Engine::G1PointAffine *)pointsC,
+        (typename Engine::G1PointAffine *)pointsH
+    );
+    return std::unique_ptr<PoqProver<Engine>>(p);
+}
+
+template <typename Engine>
 std::unique_ptr<Proof<Engine>> Prover<Engine>::prove(typename Engine::FrElement *wtns) {
 
     ThreadPool &threadPool = ThreadPool::defaultPool();
@@ -259,6 +298,286 @@ std::unique_ptr<Proof<Engine>> Prover<Engine>::prove(typename Engine::FrElement 
     E.g1.copy(p->A, pi_a);
     E.g2.copy(p->B, pi_b);
     E.g1.copy(p->C, pi_c);
+
+    return std::unique_ptr<Proof<Engine>>(p);
+}
+
+template <typename Engine>
+void PoqProver<Engine>::setBaseWitness(
+    typename Engine::FrElement *wtns,
+    const std::vector<u_int32_t> &indices)
+{
+    for (const auto index : indices) {
+        if (index >= this->nVars) {
+            throw std::invalid_argument("mutable witness index out of range");
+        }
+    }
+
+    mutableIndices = indices;
+    baseWtns.assign(wtns, wtns + this->nVars);
+
+    const uint32_t sW = sizeof(baseWtns[0]);
+    this->E.g1.multiMulByScalarMSM(baseA, this->pointsA, (uint8_t *)baseWtns.data(), sW, this->nVars);
+    this->E.g1.multiMulByScalarMSM(baseB1, this->pointsB1, (uint8_t *)baseWtns.data(), sW, this->nVars);
+    this->E.g2.multiMulByScalarMSM(baseB2, this->pointsB2, (uint8_t *)baseWtns.data(), sW, this->nVars);
+    this->E.g1.multiMulByScalarMSM(
+        baseC,
+        this->pointsC,
+        (uint8_t *)(baseWtns.data() + (this->nPublic + 1)),
+        sW,
+        this->nVars - this->nPublic - 1);
+
+    baseReady = true;
+}
+
+template <typename Engine>
+std::unique_ptr<Proof<Engine>> PoqProver<Engine>::proveWithDeltas(typename Engine::FrElement *wtns)
+{
+    if (!baseReady) {
+        throw std::invalid_argument("base witness not initialized");
+    }
+
+    ThreadPool &threadPool = ThreadPool::defaultPool();
+    const uint32_t sW = sizeof(wtns[0]);
+
+    std::vector<typename Engine::FrElement> deltaScalars;
+    std::vector<typename Engine::G1PointAffine> deltaPointsA;
+    std::vector<typename Engine::G1PointAffine> deltaPointsB1;
+    std::vector<typename Engine::G2PointAffine> deltaPointsB2;
+    std::vector<typename Engine::FrElement> deltaScalarsC;
+    std::vector<typename Engine::G1PointAffine> deltaPointsC;
+
+    deltaScalars.reserve(mutableIndices.size());
+    deltaPointsA.reserve(mutableIndices.size());
+    deltaPointsB1.reserve(mutableIndices.size());
+    deltaPointsB2.reserve(mutableIndices.size());
+
+    for (const auto index : mutableIndices) {
+        typename Engine::FrElement delta;
+
+        this->E.fr.sub(delta, wtns[index], baseWtns[index]);
+        deltaScalars.push_back(delta);
+        deltaPointsA.push_back(this->pointsA[index]);
+        deltaPointsB1.push_back(this->pointsB1[index]);
+        deltaPointsB2.push_back(this->pointsB2[index]);
+
+        if (index > this->nPublic) {
+            const u_int32_t cIndex = index - (this->nPublic + 1);
+            deltaScalarsC.push_back(delta);
+            deltaPointsC.push_back(this->pointsC[cIndex]);
+        }
+    }
+
+    typename Engine::G1Point pi_a;
+    typename Engine::G1Point pib1;
+    typename Engine::G2Point pi_b;
+    typename Engine::G1Point pi_c;
+
+    this->E.g1.copy(pi_a, baseA);
+    this->E.g1.copy(pib1, baseB1);
+    this->E.g2.copy(pi_b, baseB2);
+    this->E.g1.copy(pi_c, baseC);
+
+    if (!deltaScalars.empty()) {
+        typename Engine::G1Point deltaA;
+        typename Engine::G1Point deltaB1;
+        typename Engine::G2Point deltaB2;
+
+        this->E.g1.multiMulByScalarMSM(deltaA, deltaPointsA.data(), (uint8_t *)deltaScalars.data(), sW, deltaScalars.size());
+        this->E.g1.multiMulByScalarMSM(deltaB1, deltaPointsB1.data(), (uint8_t *)deltaScalars.data(), sW, deltaScalars.size());
+        this->E.g2.multiMulByScalarMSM(deltaB2, deltaPointsB2.data(), (uint8_t *)deltaScalars.data(), sW, deltaScalars.size());
+
+        this->E.g1.add(pi_a, pi_a, deltaA);
+        this->E.g1.add(pib1, pib1, deltaB1);
+        this->E.g2.add(pi_b, pi_b, deltaB2);
+    }
+
+    if (!deltaScalarsC.empty()) {
+        typename Engine::G1Point deltaC;
+        this->E.g1.multiMulByScalarMSM(deltaC, deltaPointsC.data(), (uint8_t *)deltaScalarsC.data(), sW, deltaScalarsC.size());
+        this->E.g1.add(pi_c, pi_c, deltaC);
+    }
+
+    LOG_TRACE("Start Initializing a b c A");
+    auto a = new typename Engine::FrElement[this->domainSize];
+    auto b = new typename Engine::FrElement[this->domainSize];
+    auto c = new typename Engine::FrElement[this->domainSize];
+
+    threadPool.parallelFor(0, this->domainSize, [&] (int64_t begin, int64_t end, uint64_t idThread) {
+        for (u_int32_t i=begin; i<end; i++) {
+            this->E.fr.copy(a[i], this->E.fr.zero());
+            this->E.fr.copy(b[i], this->E.fr.zero());
+        }
+    });
+
+    LOG_TRACE("Processing coefs");
+
+    #define NLOCKS 1024
+    std::vector<std::mutex> locks(NLOCKS);
+
+    threadPool.parallelFor(0, this->nCoefs, [&] (int64_t begin, int64_t end, uint64_t idThread) {
+        for (u_int64_t i=begin; i<end; i++) {
+            typename Engine::FrElement *ab = (this->coefs[i].m == 0) ? a : b;
+            typename Engine::FrElement aux;
+
+            this->E.fr.mul(
+                aux,
+                wtns[this->coefs[i].s],
+                this->coefs[i].coef
+            );
+
+            std::lock_guard<std::mutex> guard(locks[this->coefs[i].c % NLOCKS]);
+
+            this->E.fr.add(
+                ab[this->coefs[i].c],
+                ab[this->coefs[i].c],
+                aux
+            );
+        }
+    });
+
+    LOG_TRACE("Calculating c");
+    threadPool.parallelFor(0, this->domainSize, [&] (int64_t begin, int64_t end, uint64_t idThread) {
+        for (u_int64_t i=begin; i<end; i++) {
+            this->E.fr.mul(
+                c[i],
+                a[i],
+                b[i]
+            );
+        }
+    });
+
+    LOG_TRACE("Initializing fft");
+    u_int32_t domainPower = this->fft->log2(this->domainSize);
+
+    LOG_TRACE("Start iFFT A");
+    this->fft->ifft(a, this->domainSize);
+    LOG_TRACE("a After ifft:");
+    LOG_DEBUG(this->E.fr.toString(a[0]).c_str());
+    LOG_DEBUG(this->E.fr.toString(a[1]).c_str());
+    LOG_TRACE("Start Shift A");
+
+    threadPool.parallelFor(0, this->domainSize, [&] (int64_t begin, int64_t end, uint64_t idThread) {
+        for (u_int64_t i=begin; i<end; i++) {
+            this->E.fr.mul(a[i], a[i], this->fft->root(domainPower+1, i));
+        }
+    });
+
+    LOG_TRACE("a After shift:");
+    LOG_DEBUG(this->E.fr.toString(a[0]).c_str());
+    LOG_DEBUG(this->E.fr.toString(a[1]).c_str());
+    LOG_TRACE("Start FFT A");
+    this->fft->fft(a, this->domainSize);
+    LOG_TRACE("a After fft:");
+    LOG_DEBUG(this->E.fr.toString(a[0]).c_str());
+    LOG_DEBUG(this->E.fr.toString(a[1]).c_str());
+    LOG_TRACE("Start iFFT B");
+    this->fft->ifft(b, this->domainSize);
+    LOG_TRACE("b After ifft:");
+    LOG_DEBUG(this->E.fr.toString(b[0]).c_str());
+    LOG_DEBUG(this->E.fr.toString(b[1]).c_str());
+    LOG_TRACE("Start Shift B");
+    threadPool.parallelFor(0, this->domainSize, [&] (int64_t begin, int64_t end, uint64_t idThread) {
+        for (u_int64_t i=begin; i<end; i++) {
+            this->E.fr.mul(b[i], b[i], this->fft->root(domainPower+1, i));
+        }
+    });
+    LOG_TRACE("b After shift:");
+    LOG_DEBUG(this->E.fr.toString(b[0]).c_str());
+    LOG_DEBUG(this->E.fr.toString(b[1]).c_str());
+    LOG_TRACE("Start FFT B");
+    this->fft->fft(b, this->domainSize);
+    LOG_TRACE("b After fft:");
+    LOG_DEBUG(this->E.fr.toString(b[0]).c_str());
+    LOG_DEBUG(this->E.fr.toString(b[1]).c_str());
+
+    LOG_TRACE("Start iFFT C");
+    this->fft->ifft(c, this->domainSize);
+    LOG_TRACE("c After ifft:");
+    LOG_DEBUG(this->E.fr.toString(c[0]).c_str());
+    LOG_DEBUG(this->E.fr.toString(c[1]).c_str());
+    LOG_TRACE("Start Shift C");
+    threadPool.parallelFor(0, this->domainSize, [&] (int64_t begin, int64_t end, uint64_t idThread) {
+        for (u_int64_t i=begin; i<end; i++) {
+            this->E.fr.mul(c[i], c[i], this->fft->root(domainPower+1, i));
+        }
+    });
+    LOG_TRACE("c After shift:");
+    LOG_DEBUG(this->E.fr.toString(c[0]).c_str());
+    LOG_DEBUG(this->E.fr.toString(c[1]).c_str());
+    LOG_TRACE("Start FFT C");
+    this->fft->fft(c, this->domainSize);
+    LOG_TRACE("c After fft:");
+    LOG_DEBUG(this->E.fr.toString(c[0]).c_str());
+    LOG_DEBUG(this->E.fr.toString(c[1]).c_str());
+
+    LOG_TRACE("Start ABC");
+    threadPool.parallelFor(0, this->domainSize, [&] (int64_t begin, int64_t end, uint64_t idThread) {
+        for (u_int64_t i=begin; i<end; i++) {
+            this->E.fr.mul(a[i], a[i], b[i]);
+            this->E.fr.sub(a[i], a[i], c[i]);
+            this->E.fr.fromMontgomery(a[i], a[i]);
+        }
+    });
+    LOG_TRACE("abc:");
+    LOG_DEBUG(this->E.fr.toString(a[0]).c_str());
+    LOG_DEBUG(this->E.fr.toString(a[1]).c_str());
+
+    delete [] b;
+    delete [] c;
+
+    LOG_TRACE("Start Multiexp H");
+    typename Engine::G1Point pih;
+    this->E.g1.multiMulByScalarMSM(pih, this->pointsH, (uint8_t *)a, sizeof(a[0]), this->domainSize);
+    std::ostringstream ss1;
+    ss1 << "pih: " << this->E.g1.toString(pih);
+    LOG_DEBUG(ss1);
+
+    delete [] a;
+
+    typename Engine::FrElement r;
+    typename Engine::FrElement s;
+    typename Engine::FrElement rs;
+
+    this->E.fr.copy(r, this->E.fr.zero());
+    this->E.fr.copy(s, this->E.fr.zero());
+
+    randombytes_buf((void *)&(r.v[0]), sizeof(r)-1);
+    randombytes_buf((void *)&(s.v[0]), sizeof(s)-1);
+
+    typename Engine::G1Point p1;
+    typename Engine::G2Point p2;
+
+    this->E.g1.add(pi_a, pi_a, this->vk_alpha1);
+    this->E.g1.mulByScalar(p1, this->vk_delta1, (uint8_t *)&r, sizeof(r));
+    this->E.g1.add(pi_a, pi_a, p1);
+
+    this->E.g2.add(pi_b, pi_b, this->vk_beta2);
+    this->E.g2.mulByScalar(p2, this->vk_delta2, (uint8_t *)&s, sizeof(s));
+    this->E.g2.add(pi_b, pi_b, p2);
+
+    this->E.g1.add(pib1, pib1, this->vk_beta1);
+    this->E.g1.mulByScalar(p1, this->vk_delta1, (uint8_t *)&s, sizeof(s));
+    this->E.g1.add(pib1, pib1, p1);
+
+    this->E.g1.add(pi_c, pi_c, pih);
+
+    this->E.g1.mulByScalar(p1, pi_a, (uint8_t *)&s, sizeof(s));
+    this->E.g1.add(pi_c, pi_c, p1);
+
+    this->E.g1.mulByScalar(p1, pib1, (uint8_t *)&r, sizeof(r));
+    this->E.g1.add(pi_c, pi_c, p1);
+
+    this->E.fr.mul(rs, r, s);
+    this->E.fr.toMontgomery(rs, rs);
+
+    this->E.g1.mulByScalar(p1, this->vk_delta1, (uint8_t *)&rs, sizeof(rs));
+    this->E.g1.sub(pi_c, pi_c, p1);
+
+    Proof<Engine> *p = new Proof<Engine>(Engine::engine);
+    this->E.g1.copy(p->A, pi_a);
+    this->E.g2.copy(p->B, pi_b);
+    this->E.g1.copy(p->C, pi_c);
 
     return std::unique_ptr<Proof<Engine>>(p);
 }

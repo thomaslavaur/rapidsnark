@@ -1,6 +1,8 @@
 #ifndef PROVER_HPP
 #define PROVER_HPP
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -151,6 +153,57 @@ groth16_prover_zkey_file(
     unsigned long long  *public_size,
     char                *error_msg,
     unsigned long long   error_msg_maxsize);
+
+/**
+ * Initializes 'prover_object' with a pointer to a new POQ prover object.
+ * The prover precomputes MSM contributions for a base witness and reuses
+ * them for subsequent proofs by applying deltas on mutable witness indices.
+ *
+ * @param prover_object Output pointer for prover object.
+ * @param zkey_buffer Zkey data buffer.
+ * @param zkey_size Size of zkey buffer.
+ * @param base_wtns_buffer Base witness buffer (wtns format).
+ * @param base_wtns_size Size of base witness buffer.
+ * @param mutable_indexes Array of mutable witness indices (0-based).
+ * @param mutable_indexes_len Length of mutable_indexes array.
+ *
+ * @return error code:
+ *         PROVER_OK - success
+ *         PROVER_INVALID_WITNESS_LENGTH - witness length doesn't match circuit
+ *         PROVER_ERROR - other error, see error_msg
+ */
+int
+groth16_poq_prover_create(
+    void                **prover_object,
+    const void          *zkey_buffer,
+    unsigned long long   zkey_size,
+    const void          *base_wtns_buffer,
+    unsigned long long   base_wtns_size,
+    const u_int32_t     *mutable_indexes,
+    unsigned long long   mutable_indexes_len,
+    char                *error_msg,
+    unsigned long long   error_msg_maxsize);
+
+/**
+ * Proves using a POQ prover created by groth16_poq_prover_create.
+ */
+int
+groth16_poq_prover_prove(
+    void                *prover_object,
+    const void          *wtns_buffer,
+    unsigned long long   wtns_size,
+    char                *proof_buffer,
+    unsigned long long  *proof_size,
+    char                *public_buffer,
+    unsigned long long  *public_size,
+    char                *error_msg,
+    unsigned long long   error_msg_maxsize);
+
+/**
+ * Destroys a POQ prover object.
+ */
+void
+groth16_poq_prover_destroy(void *prover_object);
 
 #ifdef __cplusplus
 }

@@ -158,6 +158,89 @@ public:
     }
 };
 
+class Groth16PoqProver
+{
+    BinFileUtils::BinFile zkey;
+    std::unique_ptr<ZKeyUtils::Header> zkeyHeader;
+    std::unique_ptr<Groth16::PoqProver<AltBn128::Engine>> prover;
+
+public:
+    Groth16PoqProver(const void         *zkey_buffer,
+                     unsigned long long  zkey_size,
+                     const void         *base_wtns_buffer,
+                     unsigned long long  base_wtns_size,
+                     const std::vector<u_int32_t> &mutable_indices)
+        : zkey(zkey_buffer, zkey_size, "zkey", 1),
+          zkeyHeader(ZKeyUtils::loadHeader(&zkey))
+    {
+        if (!PrimeIsValid(zkeyHeader->rPrime)) {
+            throw std::invalid_argument("zkey curve not supported");
+        }
+
+        prover = Groth16::makePoqProver<AltBn128::Engine>(
+            zkeyHeader->nVars,
+            zkeyHeader->nPublic,
+            zkeyHeader->domainSize,
+            zkeyHeader->nCoefs,
+            zkeyHeader->vk_alpha1,
+            zkeyHeader->vk_beta1,
+            zkeyHeader->vk_beta2,
+            zkeyHeader->vk_delta1,
+            zkeyHeader->vk_delta2,
+            zkey.getSectionData(4),    // Coefs
+            zkey.getSectionData(5),    // pointsA
+            zkey.getSectionData(6),    // pointsB1
+            zkey.getSectionData(7),    // pointsB2
+            zkey.getSectionData(8),    // pointsC
+            zkey.getSectionData(9)     // pointsH1
+        );
+
+        BinFileUtils::BinFile baseWtns(base_wtns_buffer, base_wtns_size, "wtns", 2);
+        auto baseHeader = WtnsUtils::loadHeader(&baseWtns);
+
+        if (zkeyHeader->nVars != baseHeader->nVars) {
+            throw InvalidWitnessLengthException("Invalid witness length. Circuit: "
+                                        + std::to_string(zkeyHeader->nVars)
+                                        + ", witness: "
+                                        + std::to_string(baseHeader->nVars));
+        }
+
+        if (!PrimeIsValid(baseHeader->prime)) {
+            throw std::invalid_argument("different wtns curve");
+        }
+
+        AltBn128::FrElement *baseWtnsData = (AltBn128::FrElement *)baseWtns.getSectionData(2);
+        prover->setBaseWitness(baseWtnsData, mutable_indices);
+    }
+
+    void prove(const void         *wtns_buffer,
+               unsigned long long  wtns_size,
+               std::string        &stringProof,
+               std::string        &stringPublic)
+    {
+        BinFileUtils::BinFile wtns(wtns_buffer, wtns_size, "wtns", 2);
+        auto wtnsHeader = WtnsUtils::loadHeader(&wtns);
+
+        if (zkeyHeader->nVars != wtnsHeader->nVars) {
+            throw InvalidWitnessLengthException("Invalid witness length. Circuit: "
+                                        + std::to_string(zkeyHeader->nVars)
+                                        + ", witness: "
+                                        + std::to_string(wtnsHeader->nVars));
+        }
+
+        if (!PrimeIsValid(wtnsHeader->prime)) {
+            throw std::invalid_argument("different wtns curve");
+        }
+
+        AltBn128::FrElement *wtnsData = (AltBn128::FrElement *)wtns.getSectionData(2);
+
+        auto proof = prover->proveWithDeltas(wtnsData);
+
+        stringProof = proof->toJson().dump();
+        stringPublic = BuildPublicString(wtnsData, zkeyHeader->nPublic);
+    }
+};
+
 int
 groth16_public_size_for_zkey_buf(
     const void          *zkey_buffer,
@@ -464,4 +547,175 @@ groth16_prover_zkey_file(
             public_size,
             error_msg,
             error_msg_maxsize);
+}
+
+int
+groth16_poq_prover_create(
+    void                **prover_object,
+    const void          *zkey_buffer,
+    unsigned long long   zkey_size,
+    const void          *base_wtns_buffer,
+    unsigned long long   base_wtns_size,
+    const u_int32_t     *mutable_indexes,
+    unsigned long long   mutable_indexes_len,
+    char                *error_msg,
+    unsigned long long   error_msg_maxsize)
+{
+    try {
+        if (prover_object == NULL) {
+            throw std::invalid_argument("Null prover object");
+        }
+
+        if (zkey_buffer == NULL) {
+            throw std::invalid_argument("Null zkey buffer");
+        }
+
+        if (base_wtns_buffer == NULL) {
+            throw std::invalid_argument("Null base witness buffer");
+        }
+
+        if (mutable_indexes == NULL && mutable_indexes_len > 0) {
+            throw std::invalid_argument("Null mutable indexes");
+        }
+
+        std::vector<u_int32_t> indices;
+        indices.assign(mutable_indexes, mutable_indexes + mutable_indexes_len);
+
+        Groth16PoqProver *prover = new Groth16PoqProver(
+            zkey_buffer,
+            zkey_size,
+            base_wtns_buffer,
+            base_wtns_size,
+            indices);
+
+        *prover_object = prover;
+
+    } catch (InvalidWitnessLengthException& e) {
+        CopyError(error_msg, error_msg_maxsize, e);
+        return PROVER_INVALID_WITNESS_LENGTH;
+
+    } catch (std::exception& e) {
+        CopyError(error_msg, error_msg_maxsize, e);
+        return PROVER_ERROR;
+
+    } catch (std::exception *e) {
+        CopyError(error_msg, error_msg_maxsize, *e);
+        delete e;
+        return PROVER_ERROR;
+
+    } catch (...) {
+        CopyErrorFmt(error_msg, error_msg_maxsize, "unknown error");
+        return PROVER_ERROR;
+    }
+
+    return PROVER_OK;
+}
+
+int
+groth16_poq_prover_prove(
+    void                *prover_object,
+    const void          *wtns_buffer,
+    unsigned long long   wtns_size,
+    char                *proof_buffer,
+    unsigned long long  *proof_size,
+    char                *public_buffer,
+    unsigned long long  *public_size,
+    char                *error_msg,
+    unsigned long long   error_msg_maxsize)
+{
+    if (!prover_object) {
+        CopyErrorFmt(error_msg, error_msg_maxsize, "Null prover object");
+        return PROVER_ERROR;
+    }
+
+    if (!wtns_buffer) {
+        CopyErrorFmt(error_msg, error_msg_maxsize, "Null witness buffer");
+        return PROVER_ERROR;
+    }
+
+    if (!proof_buffer) {
+        CopyErrorFmt(error_msg, error_msg_maxsize, "Null proof buffer");
+        return PROVER_ERROR;
+    }
+
+    if (!proof_size) {
+        CopyErrorFmt(error_msg, error_msg_maxsize, "Null proof size");
+        return PROVER_ERROR;
+    }
+
+    if (!public_buffer) {
+        CopyErrorFmt(error_msg, error_msg_maxsize, "Null public buffer");
+        return PROVER_ERROR;
+    }
+
+    if (!public_size) {
+        CopyErrorFmt(error_msg, error_msg_maxsize, "Null public size");
+        return PROVER_ERROR;
+    }
+
+    auto prover = static_cast<Groth16PoqProver*>(prover_object);
+
+    std::string stringProof;
+    std::string stringPublic;
+
+    try {
+        prover->prove(wtns_buffer, wtns_size, stringProof, stringPublic);
+
+    } catch(InvalidWitnessLengthException& e) {
+        CopyError(error_msg, error_msg_maxsize, e);
+        return PROVER_INVALID_WITNESS_LENGTH;
+
+    } catch (std::exception& e) {
+        CopyError(error_msg, error_msg_maxsize, e);
+        return PROVER_ERROR;
+
+    } catch (std::exception *e) {
+        CopyError(error_msg, error_msg_maxsize, *e);
+        delete e;
+        return PROVER_ERROR;
+
+    } catch (...) {
+        CopyErrorFmt(error_msg, error_msg_maxsize, "unknown error");
+        return PROVER_ERROR;
+    }
+
+    if (stringProof.length() >= ULLONG_MAX || stringPublic.length() >= ULLONG_MAX) {
+        CopyErrorFmt(error_msg, error_msg_maxsize, "Proof or public data too large");
+        return PROVER_ERROR;
+    }
+
+    unsigned long long requiredProofSize = stringProof.length() + 1;
+    unsigned long long requiredPublicSize = stringPublic.length() + 1;
+
+    if (*proof_size < requiredProofSize || *public_size < requiredPublicSize) {
+        unsigned long long origProofSize = *proof_size;
+        unsigned long long origPublicSize = *public_size;
+        *proof_size = requiredProofSize;
+        *public_size = requiredPublicSize;
+
+        CopyErrorFmt(error_msg, error_msg_maxsize,
+            "Buffer insufficient for generated proof. Required - proof: %llu (provided: %llu), public: %llu (provided: %llu)",
+            requiredProofSize, origProofSize, requiredPublicSize, origPublicSize);
+        return PROVER_ERROR_SHORT_BUFFER;
+    }
+
+    std::memcpy(proof_buffer, stringProof.c_str(), stringProof.length());
+    proof_buffer[stringProof.length()] = '\0';
+    *proof_size = stringProof.length();
+
+    std::memcpy(public_buffer, stringPublic.c_str(), stringPublic.length());
+    public_buffer[stringPublic.length()] = '\0';
+    *public_size = stringPublic.length();
+
+    return PROVER_OK;
+}
+
+void
+groth16_poq_prover_destroy(void *prover_object)
+{
+    if (prover_object != NULL) {
+        Groth16PoqProver *prover = static_cast<Groth16PoqProver*>(prover_object);
+
+        delete prover;
+    }
 }

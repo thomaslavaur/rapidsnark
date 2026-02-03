@@ -119,6 +119,29 @@ with:
 ./package/bin/prover <circuit.zkey> <witness.wtns> <proof.json> <public.json>
 ```
 
+### Batch proving with POQ prover
+
+If you need to generate multiple proofs that differ only at specific witness indices, you can use the POQ prover
+to precompute the common MSM contribution from a base witness and reuse it across a batch.
+
+Create a JSON array of mutable witness indices (0-based, matching the wtns ordering). For example:
+
+```json
+[1, 13, 16892, 16893]
+```
+
+Then run:
+
+```sh
+./package/bin/poq_prover <circuit.zkey> <base.wtns> <mutable_indices.json> <count> \
+  <witness_1.wtns> ... <witness_n.wtns> \
+  <proof_1.json> ... <proof_n.json> \
+  <public_1.json> ... <public_n.json>
+```
+
+The POQ prover loads the proving key once, precomputes MSM contributions from `<base.wtns>`, and applies deltas
+for the mutable indices per witness file.
+
 ## Compile prover in server mode
 
 ```sh
