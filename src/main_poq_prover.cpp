@@ -61,34 +61,6 @@ std::vector<u_int32_t> BuildModifiedIndices(u_int32_t nVars)
     return indices;
 }
 
-std::vector<u_int32_t> BuildComonIndices(u_int32_t nVars)
-{
-    std::vector<u_int32_t> indices;
-    auto addIndex = [&](u_int32_t idx) {
-        if (idx < nVars) {
-            indices.push_back(idx);
-        }
-    };
-    auto addRange = [&](u_int32_t start, u_int32_t end) {
-        if (start >= nVars) {
-            return;
-        }
-        const u_int32_t cappedEnd = std::min(end, static_cast<u_int32_t>(nVars - 1));
-        for (u_int32_t idx = start; idx <= cappedEnd; ++idx) {
-            indices.push_back(idx);
-        }
-    };
-
-    addIndex(0);
-    addRange(2, 12);
-    addRange(14, 16891);
-    addRange(17132, 17135);
-    addRange(17144, 17380);
-    addIndex(18092);
-
-    return indices;
-}
-
 std::string BuildPublicString(AltBn128::FrElement *wtnsData, uint32_t nPublic)
 {
     json jsonPublic;
@@ -129,7 +101,6 @@ public:
             zkey.getSectionData(9));
 
         modifiedIndices = BuildModifiedIndices(zkeyHeader->nVars);
-        comonIndices = BuildComonIndices(zkeyHeader->nVars);
     }
 
     void setBaseWitness(BinFileUtils::BinFile &wtnsFile)
@@ -139,11 +110,33 @@ public:
 
         auto wtnsData = static_cast<AltBn128::FrElement *>(wtnsFile.getSectionData(2));
 
-        typename AltBn128::Engine::G1Point comonA;
-        typename AltBn128::Engine::G1Point comonB1;
-        typename AltBn128::Engine::G2Point comonB2;
-        typename AltBn128::Engine::G1Point comonC;
-        prover->computeMSMForIndices(wtnsData, comonIndices, comonA, comonB1, comonB2, comonC);
+        typename AltBn128::Engine::G1Point baseA;
+        typename AltBn128::Engine::G1Point baseB1;
+        typename AltBn128::Engine::G2Point baseB2;
+        typename AltBn128::Engine::G1Point baseC;
+        prover->computeMSMForWitness(wtnsData, baseA, baseB1, baseB2, baseC);
+
+        typename AltBn128::Engine::G1Point variableA;
+        typename AltBn128::Engine::G1Point variableB1;
+        typename AltBn128::Engine::G2Point variableB2;
+        typename AltBn128::Engine::G1Point variableC;
+        prover->computeMSMForIndices(wtnsData, modifiedIndices, variableA, variableB1, variableB2, variableC);
+
+        AltBn128::Engine &E = AltBn128::Engine::engine;
+        typename AltBn128::Engine::G1Point neg;
+        typename AltBn128::Engine::G2Point neg2;
+
+        E.g1.neg(neg, variableA);
+        E.g1.add(commonA, baseA, neg);
+
+        E.g1.neg(neg, variableB1);
+        E.g1.add(commonB1, baseB1, neg);
+
+        E.g2.neg(neg2, variableB2);
+        E.g2.add(commonB2, baseB2, neg2);
+
+        E.g1.neg(neg, variableC);
+        E.g1.add(commonC, baseC, neg);
 
         hasCommon = true;
     }

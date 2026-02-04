@@ -3,6 +3,7 @@
 
 #include <string>
 #include <array>
+#include <vector>
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
@@ -112,15 +113,37 @@ namespace Groth16 {
             delete fft;
         }
 
+        void computeMSMForWitness(
+            typename Engine::FrElement *wtns,
+            typename Engine::G1Point &pi_a,
+            typename Engine::G1Point &pib1,
+            typename Engine::G2Point &pi_b,
+            typename Engine::G1Point &pi_c);
+
+        void computeMSMForIndices(
+            typename Engine::FrElement *wtns,
+            const std::vector<u_int32_t> &indices,
+            typename Engine::G1Point &pi_a,
+            typename Engine::G1Point &pib1,
+            typename Engine::G2Point &pi_b,
+            typename Engine::G1Point &pi_c);
+
+        std::unique_ptr<Proof<Engine>> proveWithPrecomputed(
+            typename Engine::FrElement *wtns,
+            typename Engine::G1Point &pi_a,
+            typename Engine::G1Point &pib1,
+            typename Engine::G2Point &pi_b,
+            typename Engine::G1Point &pi_c);
+
         std::unique_ptr<Proof<Engine>> prove(typename Engine::FrElement *wtns);
     };
 
     template <typename Engine>
     std::unique_ptr<Prover<Engine>> makeProver(
-        u_int32_t nVars, 
-        u_int32_t nPublic, 
-        u_int32_t domainSize, 
-        u_int64_t nCoefs, 
+        u_int32_t nVars,
+        u_int32_t nPublic,
+        u_int32_t domainSize,
+        u_int64_t nCoefs,
         void *vk_alpha1,
         void *vk_beta1,
         void *vk_beta2,

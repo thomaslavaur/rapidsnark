@@ -47,6 +47,40 @@ std::unique_ptr<Prover<Engine>> makeProver(
 }
 
 template <typename Engine>
+void Prover<Engine>::computeMSMForWitness(
+    typename Engine::FrElement *wtns,
+    typename Engine::G1Point &pi_a,
+    typename Engine::G1Point &pib1,
+    typename Engine::G2Point &pi_b,
+    typename Engine::G1Point &pi_c)
+{
+    LOG_TRACE("Start Multiexp A");
+    uint32_t sW = sizeof(wtns[0]);
+    E.g1.multiMulByScalarMSM(pi_a, pointsA, (uint8_t *)wtns, sW, nVars);
+    std::ostringstream ss2;
+    ss2 << "pi_a: " << E.g1.toString(pi_a);
+    LOG_DEBUG(ss2);
+
+    LOG_TRACE("Start Multiexp B1");
+    E.g1.multiMulByScalarMSM(pib1, pointsB1, (uint8_t *)wtns, sW, nVars);
+    std::ostringstream ss3;
+    ss3 << "pib1: " << E.g1.toString(pib1);
+    LOG_DEBUG(ss3);
+
+    LOG_TRACE("Start Multiexp B2");
+    E.g2.multiMulByScalarMSM(pi_b, pointsB2, (uint8_t *)wtns, sW, nVars);
+    std::ostringstream ss4;
+    ss4 << "pi_b: " << E.g2.toString(pi_b);
+    LOG_DEBUG(ss4);
+
+    LOG_TRACE("Start Multiexp C");
+    E.g1.multiMulByScalarMSM(pi_c, pointsC, (uint8_t *)((uint64_t)wtns + (nPublic +1)*sW), sW, nVars-nPublic-1);
+    std::ostringstream ss5;
+    ss5 << "pi_c: " << E.g1.toString(pi_c);
+    LOG_DEBUG(ss5);
+}
+
+template <typename Engine>
 void Prover<Engine>::computeMSMForIndices(
     typename Engine::FrElement *wtns,
     const std::vector<u_int32_t> &indices,
@@ -139,48 +173,8 @@ void Prover<Engine>::computeMSMForIndices(
     }
 }
 
-void Prover<Engine>::computeMSMForWitness(
-    typename Engine::FrElement *wtns,
-    typename Engine::G1Point &pi_a,
-    typename Engine::G1Point &pib1,
-    typename Engine::G2Point &pi_b,
-    typename Engine::G1Point &pi_c)
-{
-
-    ThreadPool &threadPool = ThreadPool::defaultPool();
-
-    LOG_TRACE("Start Multiexp A");
-    uint32_t sW = sizeof(wtns[0]);
-    typename Engine::G1Point pi_a;
-    E.g1.multiMulByScalarMSM(pi_a, pointsA, (uint8_t *)wtns, sW, nVars);
-    std::ostringstream ss2;
-    ss2 << "pi_a: " << E.g1.toString(pi_a);
-    LOG_DEBUG(ss2);
-
-    LOG_TRACE("Start Multiexp B1");
-    typename Engine::G1Point pib1;
-    E.g1.multiMulByScalarMSM(pib1, pointsB1, (uint8_t *)wtns, sW, nVars);
-    std::ostringstream ss3;
-    ss3 << "pib1: " << E.g1.toString(pib1);
-    LOG_DEBUG(ss3);
-
-    LOG_TRACE("Start Multiexp B2");
-    typename Engine::G2Point pi_b;
-    E.g2.multiMulByScalarMSM(pi_b, pointsB2, (uint8_t *)wtns, sW, nVars);
-    std::ostringstream ss4;
-    ss4 << "pi_b: " << E.g2.toString(pi_b);
-    LOG_DEBUG(ss4);
-
-    LOG_TRACE("Start Multiexp C");
-    typename Engine::G1Point pi_c;
-    E.g1.multiMulByScalarMSM(pi_c, pointsC, (uint8_t *)((uint64_t)wtns + (nPublic +1)*sW), sW, nVars-nPublic-1);
-    std::ostringstream ss5;
-    ss5 << "pi_c: " << E.g1.toString(pi_c);
-    LOG_DEBUG(ss5);
-}
-
 template <typename Engine>
-std::unique_ptr<Proof<Engine>> Prover<Engine>::proveWithPreComputed(
+std::unique_ptr<Proof<Engine>> Prover<Engine>::proveWithPrecomputed(
     typename Engine::FrElement *wtns,
     typename Engine::G1Point &pi_a,
     typename Engine::G1Point &pib1,
@@ -392,7 +386,7 @@ std::string Proof<Engine>::toJsonStr() {
     ss << " \"pi_b\": [[\"" << E.f1.toString(B.x.a) << "\",\"" << E.f1.toString(B.x.b) << "\"],[\"" << E.f1.toString(B.y.a) << "\",\"" << E.f1.toString(B.y.b) << "\"], [\"1\",\"0\"]], ";
     ss << " \"pi_c\": [\"" << E.f1.toString(C.x) << "\",\"" << E.f1.toString(C.y) << "\",\"1\"], ";
     ss << " \"protocol\":\"groth16\" }";
-        
+
     return ss.str();
 }
 
@@ -427,7 +421,7 @@ json Proof<Engine>::toJson() {
     p["pi_c"].push_back("1" );
 
     p["protocol"] = "groth16";
-            
+
     return p;
 }
 
@@ -871,4 +865,4 @@ bool Verifier<Engine>::pairingCheck(G1PointArray& a, G2PointArray& b)
     return E.f12.isOne(ret);
 }
 
-} // namespace
+}
