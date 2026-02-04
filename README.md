@@ -119,6 +119,19 @@ with:
 ./package/bin/prover <circuit.zkey> <witness.wtns> <proof.json> <public.json>
 ```
 
+For PoQ (Logos' Blockchain proof of quota), we support multiple proof generation at a time. This is possible because more than 90% of the witness is the same when changing the index only (of the pulbic inputs).
+It is then supposed than the witness size is 18092 and only the witness at the following indices is modified between the different proofs:
+- `1`
+- `13`
+- `16 892` to `17 131`
+- `17 136` to `17 143`
+- `17 381` to `18 091`
+
+To build several PoQ proofs such that only the index is changing, the user can call:
+
+```sh
+./package/bin/poq_prover <circuit.zkey> <proof_count> <witness_1.wtns> ... <witness_N.wtns> <proof_1.json> ... <proof_N.json> <public_1.json> ... <public_N.json>
+```
 ## Compile prover in server mode
 
 ```sh
