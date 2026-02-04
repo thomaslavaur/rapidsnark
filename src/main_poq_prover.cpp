@@ -61,6 +61,26 @@ std::vector<u_int32_t> BuildModifiedIndices(u_int32_t nVars)
     return indices;
 }
 
+std::vector<u_int32_t> BuildCommonIndices(u_int32_t nVars, const std::vector<u_int32_t> &modifiedIndices)
+{
+    std::vector<bool> isModified(nVars, false);
+    for (u_int32_t idx : modifiedIndices) {
+        if (idx < nVars) {
+            isModified[idx] = true;
+        }
+    }
+
+    std::vector<u_int32_t> indices;
+    indices.reserve(nVars - std::min<u_int32_t>(nVars, modifiedIndices.size()));
+    for (u_int32_t idx = 0; idx < nVars; ++idx) {
+        if (!isModified[idx]) {
+            indices.push_back(idx);
+        }
+    }
+
+    return indices;
+}
+
 std::string BuildPublicString(AltBn128::FrElement *wtnsData, uint32_t nPublic)
 {
     json jsonPublic;
@@ -101,6 +121,9 @@ public:
             zkey.getSectionData(9));
 
         modifiedIndices = BuildModifiedIndices(zkeyHeader->nVars);
+        std::sort(modifiedIndices.begin(), modifiedIndices.end());
+        modifiedIndices.erase(std::unique(modifiedIndices.begin(), modifiedIndices.end()), modifiedIndices.end());
+        commonIndices = BuildCommonIndices(zkeyHeader->nVars, modifiedIndices);
     }
 
     void setBaseWitness(BinFileUtils::BinFile &wtnsFile)
@@ -110,35 +133,21 @@ public:
 
         auto wtnsData = static_cast<AltBn128::FrElement *>(wtnsFile.getSectionData(2));
 
-        typename AltBn128::Engine::G1Point baseA;
-        typename AltBn128::Engine::G1Point baseB1;
-        typename AltBn128::Engine::G2Point baseB2;
-        typename AltBn128::Engine::G1Point baseC;
-        prover->computeMSMForWitness(wtnsData, baseA, baseB1, baseB2, baseC);
-
-        typename AltBn128::Engine::G1Point variableA;
-        typename AltBn128::Engine::G1Point variableB1;
-        typename AltBn128::Engine::G2Point variableB2;
-        typename AltBn128::Engine::G1Point variableC;
-        prover->computeMSMForIndices(wtnsData, modifiedIndices, variableA, variableB1, variableB2, variableC);
-
-        AltBn128::Engine &E = AltBn128::Engine::engine;
-        typename AltBn128::Engine::G1Point neg;
-        typename AltBn128::Engine::G2Point neg2;
-
-        E.g1.neg(neg, variableA);
-        E.g1.add(commonA, baseA, neg);
-
-        E.g1.neg(neg, variableB1);
-        E.g1.add(commonB1, baseB1, neg);
-
-        E.g2.neg(neg2, variableB2);
-        E.g2.add(commonB2, baseB2, neg2);
-
-        E.g1.neg(neg, variableC);
-        E.g1.add(commonC, baseC, neg);
+        prover->computeMSMForIndices(wtnsData, commonIndices, commonA, commonB1, commonB2, commonC);
 
         hasCommon = true;
+    }
+
+    std::unique_ptr<Groth16::Proof<AltBn128::Engine>> proveFullWitness(
+        BinFileUtils::BinFile &wtnsFile,
+        std::string &publicOutput)
+    {
+        auto wtnsHeader = WtnsUtils::loadHeader(&wtnsFile);
+        ValidateWitnessHeader(wtnsHeader.get());
+
+        auto wtnsData = static_cast<AltBn128::FrElement *>(wtnsFile.getSectionData(2));
+        publicOutput = BuildPublicString(wtnsData, zkeyHeader->nPublic);
+        return prover->prove(wtnsData);
     }
 
     std::unique_ptr<Groth16::Proof<AltBn128::Engine>> proveWitness(
@@ -195,6 +204,7 @@ private:
     std::unique_ptr<ZKeyUtils::Header> zkeyHeader;
     std::unique_ptr<Groth16::Prover<AltBn128::Engine>> prover;
     std::vector<u_int32_t> modifiedIndices;
+    std::vector<u_int32_t> commonIndices;
     bool hasCommon = false;
 
     typename AltBn128::Engine::G1Point commonA;
@@ -251,12 +261,14 @@ int main(int argc, char **argv)
         for (int i = 0; i < proofCount; ++i) {
             BinFileUtils::BinFile wtnsFile(witnessFiles[i], "wtns", 2);
 
-            if (i == 0) {
+            if (proofCount > 1 && i == 0) {
                 batchProver.setBaseWitness(wtnsFile);
             }
 
             std::string publicOutput;
-            auto proof = batchProver.proveWitness(wtnsFile, publicOutput);
+            auto proof = (proofCount == 1)
+                ? batchProver.proveFullWitness(wtnsFile, publicOutput)
+                : batchProver.proveWitness(wtnsFile, publicOutput);
             const std::string proofOutput = proof->toJson().dump();
 
             std::ofstream proofFile(proofFiles[i]);
