@@ -54,9 +54,11 @@ std::vector<u_int32_t> BuildModifiedIndices(u_int32_t nVars)
 
     addIndex(1);
     addIndex(13);
-    addRange(16892, 17131);
-    addRange(17136, 17143);
-    addRange(17381, 18091);
+    addIndex(127);
+    addIndex(165);
+    addRange(5027, 5266);
+    addRange(5271, 5278);
+    addRange(5516, 6226);
 
     return indices;
 }
